@@ -1,44 +1,43 @@
 """Config flow for 1-Wire component."""
-import voluptuous as vol
+import json
 import logging
 
-import requests
-import json
-
-from homeassistant.config_entries import CONN_CLASS_CLOUD_POLL, ConfigFlow
-from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TYPE
-from homeassistant.helpers.typing import HomeAssistantType
 import homeassistant.helpers.config_validation as cv
+import requests
+import voluptuous as vol
+from homeassistant.config_entries import (CONN_CLASS_CLOUD_POLL, ConfigEntry,
+                                          ConfigFlow, OptionsFlow)
+from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TYPE
 from homeassistant.core import callback
-from homeassistant import config_entries
+from homeassistant.helpers import selector
+from homeassistant.helpers.typing import HomeAssistantType
 
-from .const import (  # pylint: disable=unused-import
-    DOMAIN,
-    CONF_SOURCES,
-    CONF_SOURCE_NAME,
-    CONF_SOURCE_ARGS,
-    CONF_SEPARATOR,
-    CONF_FETCH_TIME,
-    CONF_RANDOM_FETCH_TIME_OFFSET,
-    CONF_DAY_SWITCH_TIME,
-    DEFAULT_SEPARATOR,
-    DEFAULT_FETCH_TIME,
-    DEFAULT_RANDOM_FETCH_TIME_OFFSET,
-    DEFAULT_DAY_SWITCH_TIME,
+from .const import DOMAIN  # pylint: disable=unused-import
 
-    CONF_SERVICE,
-    CONF_CITY_ID,
-)
-from .package.scraper import Scraper, Customize
+# from .package.scraper import Scraper, Customize
 
 _LOGGER = logging.getLogger(__name__)
+
+CONF_COUNTRY = "country"
+CONF_SOURCE_NAME = "source_name"
+
+COUNTRY_LIST = [
+    selector.SelectOptionDict(value="de", label="Germany"),
+    selector.SelectOptionDict(value="en", label="Great Britain"),
+]
 
 # List of all available services
 SERVICE_ICS = "ics"
 SERVICE_ABFALLNAVI_DE = "abfallnavi_de"
 ALL_SERVICES = {
-    SERVICE_ICS: "ICS",
-    SERVICE_ABFALLNAVI_DE: "abfallnavi.de (regioit.de)",
+    "de": {
+        "service A de": "service_A_de",
+        "service B de": "service_B_de",
+    },
+    "en": {
+        "service A en": "service_A_en",
+        "service B en": "service_B_en",
+    },
 }
 
 # options for service: ICS
@@ -50,7 +49,55 @@ OPT_ICS_OFFSET = "offset"
 # schema for initial config flow, entered by "Add Integration"
 DATA_SCHEMA_USER = vol.Schema(
     {
-        vol.Required(CONF_TYPE): vol.In(ALL_SERVICES)
+        vol.Required(CONF_COUNTRY): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=COUNTRY_LIST, mode=selector.SelectSelectorMode.DROPDOWN
+            )
+        ),
+    }
+)
+
+DATA_SCHEMA_COUNTRY_DE = vol.Schema(
+    {
+        vol.Required(CONF_SOURCE_NAME): selector.SelectSelector(
+            selector.SelectSelectorConfig(options=COUNTRY_LIST)
+        ),
+    }
+)
+
+
+cfg1 = selector.TextSelectorConfig(
+    type=selector.TextSelectorType.SEARCH, suffix="mysuffix"
+)
+cfg1b = selector.TextSelectorConfig(
+    type=selector.TextSelectorType.COLOR, suffix="mysuffix"
+)
+cfg2 = selector.SelectSelectorConfig(
+    options=["a", "b"],
+    mode=selector.SelectSelectorMode.DROPDOWN,
+)
+cfg3 = selector.SelectSelectorConfig(
+    options=["a", "b"],
+    mode=selector.SelectSelectorMode.LIST,
+)
+cfg4 = selector.ConstantSelectorConfig(label="mylabel", value="myvalue")
+
+
+DATA_SCHEMA_USERx = vol.Schema(
+    {
+        vol.Required("text-selector", default="default1"): selector.TextSelector(cfg1),
+        vol.Required("color-selector", default="default1"): selector.TextSelector(
+            cfg1b
+        ),
+        vol.Required("option-selector", default="default1"): selector.SelectSelector(
+            cfg2
+        ),
+        vol.Required("option-selector2", default="default1"): selector.SelectSelector(
+            cfg3
+        ),
+        vol.Required(
+            "constant-selector", default="default1"
+        ): selector.ConstantSelector(cfg4),
     }
 )
 
@@ -63,7 +110,8 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
 
     def __init__(self):
         """Initialize config flow."""
-        self._config = { CONF_SOURCES: [] }
+        # self._config = { CONF_SOURCES: [] }
+        pass
 
     @staticmethod
     @callback
@@ -77,7 +125,16 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
         """
         errors = {}
         if user_input is not None:
-            self._config[CONF_SOURCES].append({CONF_SOURCE_NAME: user_input[CONF_TYPE], CONF_SOURCE_ARGS: {}})
+            print(user_input[CONF_COUNTRY])
+            return
+
+            return self.async_show_form(
+                step_id="country",
+                data_schema=DATA_SCHEMA_COUNTRY,
+                errors=errors,
+            )
+
+            # self._config[CONF_SOURCES].append({CONF_SOURCE_NAME: user_input[CONF_TYPE], CONF_SOURCE_ARGS: {}})
             if user_input[CONF_TYPE] == SERVICE_ICS:
                 return await self.async_step_ics()
             if user_input[CONF_TYPE] == SERVICE_ABFALLNAVI_DE:
@@ -109,14 +166,18 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
 
             if len(errors) == 0:
                 # continue only if no errors detected
-                
+
                 # test if scraper can fetch data without errors
-#  TODO: remove https://www.edg.de/ical/kalender.ics?Strasse=Dudenstr.&Hausnummer=5&Erinnerung=-1&Abfallart=1,2,3,4
-                waste_types = await self.hass.async_add_executor_job(self._test_scraper, SERVICE_ICS, user_input)
+                #  TODO: remove https://www.edg.de/ical/kalender.ics?Strasse=Dudenstr.&Hausnummer=5&Erinnerung=-1&Abfallart=1,2,3,4
+                waste_types = await self.hass.async_add_executor_job(
+                    self._test_scraper, SERVICE_ICS, user_input
+                )
                 if len(waste_types) == 0:
                     errors["base"] = "scraper_test_failed"
                 else:
-                    self._config[CONF_SOURCES].append({CONF_SOURCE_NAME: SERVICE_ICS, CONF_SOURCE_ARGS: user_input})
+                    self._config[CONF_SOURCES].append(
+                        {CONF_SOURCE_NAME: SERVICE_ICS, CONF_SOURCE_ARGS: user_input}
+                    )
 
                     return self.async_create_entry(
                         title=ALL_SERVICES[SERVICE_ICS], data=self._config
@@ -131,9 +192,7 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
         )
 
         return self.async_show_form(
-            step_id=SERVICE_ICS,
-            data_schema=DATA_SCHEMA,
-            errors=error
+            step_id=SERVICE_ICS, data_schema=DATA_SCHEMA, errors=error
         )
 
     async def async_step_abfallnavi_de(self, user_input=None):
@@ -144,7 +203,9 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
 
         errors = {}
         if user_input:
-            self._config[CONF_SOURCES][-1][CONF_SOURCE_ARGS][CONF_SERVICE] = user_input[CONF_SERVICE]
+            self._config[CONF_SOURCES][-1][CONF_SOURCE_ARGS][CONF_SERVICE] = user_input[
+                CONF_SERVICE
+            ]
             return await self.async_step_abfallnavi_de_select_city()
 
         DOMAIN_CHOICES = {
@@ -168,18 +229,11 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
             "wml2": "EGW Westmünsterland",
         }
 
-        DATA_SCHEMA = vol.Schema(
-            {
-                vol.Required(CONF_SERVICE): vol.In(DOMAIN_CHOICES)
-            }
-        )
+        DATA_SCHEMA = vol.Schema({vol.Required(CONF_SERVICE): vol.In(DOMAIN_CHOICES)})
 
         return self.async_show_form(
-            step_id=SERVICE_ABFALLNAVI_DE,
-            data_schema=DATA_SCHEMA,
-            errors=errors
+            step_id=SERVICE_ABFALLNAVI_DE, data_schema=DATA_SCHEMA, errors=errors
         )
-
 
     async def async_step_abfallnavi_de_select_city(self, user_input=None):
         """Configure specific service."""
@@ -188,9 +242,10 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
 
         errors = {}
         if user_input:
-            self._config[CONF_SOURCES][-1][CONF_SOURCE_ARGS][CONF_CITY_ID] = user_input[CONF_CITY_ID]
+            self._config[CONF_SOURCES][-1][CONF_SOURCE_ARGS][CONF_CITY_ID] = user_input[
+                CONF_CITY_ID
+            ]
             return await self.async_step_abfallnavi_de_select_street()
-
 
         r = requests.get(f"{SERVICE_URL}/rest/orte")
         r.encoding = "utf-8"  # requests doesn't guess the encoding correctly
@@ -198,17 +253,13 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
         CITY_CHOICES = {}
         for city in cities:
             CITY_CHOICES[city["id"]] = city["name"]
-      
-        DATA_SCHEMA = vol.Schema(
-            {
-                vol.Required(CONF_CITY_ID): vol.In(CITY_CHOICES)
-            }
-        )
+
+        DATA_SCHEMA = vol.Schema({vol.Required(CONF_CITY_ID): vol.In(CITY_CHOICES)})
 
         return self.async_show_form(
             step_id=SERVICE_ABFALLNAVI_DE + "_select_city",
             data_schema=DATA_SCHEMA,
-            errors=errors
+            errors=errors,
         )
 
     async def async_step_abfallnavi_de_select_street(self, user_input=None):
@@ -218,9 +269,10 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
 
         errors = {}
         if user_input:
-            self._config[CONF_SOURCES][-1][CONF_SOURCE_ARGS][CONF_CITY_ID] = user_input[CONF_CITY_ID]
+            self._config[CONF_SOURCES][-1][CONF_SOURCE_ARGS][CONF_CITY_ID] = user_input[
+                CONF_CITY_ID
+            ]
             return await self.async_step_abfallnavi_de_select_house_number()
-
 
         r = requests.get(f"{SERVICE_URL}/rest/orte{ort}/strassen")
         r.encoding = "utf-8"  # requests doesn't guess the encoding correctly
@@ -228,21 +280,17 @@ class WasteCollectionScheduleFlowHandler(ConfigFlow, domain=DOMAIN):
         CITY_CHOICES = {}
         for city in cities:
             CITY_CHOICES[city["id"]] = city["name"]
-      
-        DATA_SCHEMA = vol.Schema(
-            {
-                vol.Required(CONF_CITY_ID): vol.In(CITY_CHOICES)
-            }
-        )
+
+        DATA_SCHEMA = vol.Schema({vol.Required(CONF_CITY_ID): vol.In(CITY_CHOICES)})
 
         return self.async_show_form(
             step_id=SERVICE_ABFALLNAVI_DE + "_select_house_number",
             data_schema=DATA_SCHEMA,
-            errors=errors
+            errors=errors,
         )
 
 
-class OptionsFlowHandler(config_entries.OptionsFlow):
+class OptionsFlowHandler(OptionsFlow):
     def __init__(self, config_entry):
         """Initialize AccuWeather options flow."""
         self._config_entry = config_entry
@@ -250,34 +298,4 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(self, user_input=None):
         """Manage the options."""
         errors = {}
-        if user_input is not None:
-            # validate user input
-            try:
-                cv.time(user_input[CONF_FETCH_TIME])
-            except:
-                errors[CONF_FETCH_TIME] = "invalid_time_format"
-            try:
-                cv.positive_int(user_input[CONF_RANDOM_FETCH_TIME_OFFSET])
-            except:
-                errors[CONF_RANDOM_FETCH_TIME_OFFSET] = "invalid_positive_int"
-            try:
-                cv.time(user_input[CONF_DAY_SWITCH_TIME])
-            except:
-                errors[CONF_DAY_SWITCH_TIME] = "invalid_time_format"
-
-            if (len(errors) == 0):
-                # update options if all checks are ok
-                return self.async_create_entry(title="", data=user_input)
-
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_SEPARATOR, default=self._config_entry.options.get(CONF_SEPARATOR, DEFAULT_SEPARATOR)): str,
-                    vol.Required(CONF_FETCH_TIME, default=self._config_entry.options.get(CONF_FETCH_TIME, DEFAULT_FETCH_TIME)): str,
-                    vol.Required(CONF_RANDOM_FETCH_TIME_OFFSET, default=self._config_entry.options.get(CONF_RANDOM_FETCH_TIME_OFFSET, DEFAULT_RANDOM_FETCH_TIME_OFFSET)): int,
-                    vol.Required(CONF_DAY_SWITCH_TIME, default=self._config_entry.options.get(CONF_DAY_SWITCH_TIME, DEFAULT_DAY_SWITCH_TIME)): str,
-                }
-            ),
-            errors=errors,
-        )
+        pass

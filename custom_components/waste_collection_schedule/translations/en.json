@@ -11,9 +11,9 @@
     "step": {
       "user": {
         "title": "Setup Waste Collection Schedule",
-	"description": "Select service provider",
+	      "description": "Select country",
         "data": {
-          "type": "Service Provider"
+          "type": "country"
         }
       },
       "ics": {
